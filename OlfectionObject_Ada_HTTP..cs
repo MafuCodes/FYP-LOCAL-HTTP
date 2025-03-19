@@ -1,88 +1,109 @@
-using System;
-using System.IO; // For file operations
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
-using UnityEngine.Networking;
 
-public class DataSender : MonoBehaviour
+public class OlfactionObject : MonoBehaviour
 {
-    private bool isSendingRequest = false;
+    [Tooltip("The ParticleSystem for visual feedback when the trigger is activated")]
+    public ParticleSystem perfumeParticles;
 
-    // Replace these with your Adafruit IO credentials
-    public string adafruitIOKey = "aio_bIPa7615TKpIhUSlORmQmG2PHhMn";
-    public string adafruitIOUsername = "Mahfuj";
-    public string feedName = "exhalia-http";
+    [Tooltip("The DataSender component used to send the scent parameters to the dispenser")]
+    public DataSender dataSender;
 
-    private string filePath;
+    [Tooltip("IP Address of the dispenser")]
+    public string deviceIP;
 
-    void Start()
+    [Tooltip("Player's transform (e.g., the CenterEyeAnchor in your XR Rig)")]
+    public Transform playerTransform;
+
+    [Tooltip("Distance at which the trigger activates")]
+    public float triggerDistance = 1.5f;
+
+    [Tooltip("Time interval (in seconds) between each trigger request")]
+    public float loopInterval = 7.0f;
+
+    // Hold a reference to the coroutine so it can be stopped later
+    private Coroutine triggerCoroutine;
+
+    // This method calculates the scent parameters and sends the request using three parameters.
+    void SendScentRequest(float distance)
     {
-        // Set the file path where the CSV will be saved
-        filePath = Application.persistentDataPath + "/TIMESTAMPS-VR-TO-ADAFRUIT.csv";
-        Debug.Log("File Path: " + filePath);
+        // Calculate intensity based on the distance relative to triggerDistance.
+        int intensity = Mathf.CeilToInt(3 - 2 * (distance / triggerDistance));
+        Debug.Log("Calculated Intensity: " + intensity);
+        float duration = 7; // Fixed duration for this example
 
-        // Write headers to the CSV file if it doesn't exist
-        if (!File.Exists(filePath))
+        // Determine the intensity level string.
+        string intensity_level = "";
+        if (intensity == 1)
         {
-            using (StreamWriter writer = new StreamWriter(filePath, false))
-            {
-                writer.WriteLine("Send Timestamp,Response Timestamp");
-            }
+            intensity_level = "low";
+        }
+        else if (intensity == 2)
+        {
+            intensity_level = "medium";
+        }
+        else if (intensity == 3)
+        {
+            intensity_level = "high";
+        }
+
+        // Construct the base URL for the dispenser endpoint.
+        string urlBase = deviceIP;
+        Debug.Log("Sending scent request: URL=" + urlBase + "/diffuse?duration=" + duration + "&intensity=" + intensity_level);
+
+        // Send the GET request with three parameters: the URL, the duration, and the intensity.
+        if (dataSender != null)
+        {
+            dataSender.GetRequest(urlBase, duration.ToString(), intensity_level);
+        }
+        else
+        {
+            Debug.LogWarning("DataSender is null! Please assign it in the Inspector.");
+        }
+
+        // Play the particle system for visual feedback.
+        if (perfumeParticles != null)
+        {
+            perfumeParticles.Play();
+        }
+        else
+        {
+            Debug.LogWarning("perfumeParticles is null! Please assign it in the Inspector.");
         }
     }
 
-    public void GetRequest(string deviceIP, string duration, string intensity)
+    void Update()
     {
-        if (!isSendingRequest)
+        // Calculate the current distance between the player and this object.
+        float currentDistance = Vector3.Distance(playerTransform.position, transform.position);
+        Debug.Log("Current Distance: " + currentDistance);
+
+        // If the player is within range and the looping coroutine isn't already running, start it.
+        if (currentDistance <= triggerDistance && triggerCoroutine == null)
         {
-            StartCoroutine(SendToAdafruitIO(deviceIP, duration, intensity));
+            Debug.Log("Player within trigger distance. Starting loop.");
+            triggerCoroutine = StartCoroutine(TriggerLoop());
+        }
+        // If the player moves out of range and the coroutine is running, stop it.
+        else if (currentDistance > triggerDistance && triggerCoroutine != null)
+        {
+            Debug.Log("Player out of trigger distance. Stopping loop.");
+            StopCoroutine(triggerCoroutine);
+            triggerCoroutine = null;
         }
     }
 
-    IEnumerator SendToAdafruitIO(string deviceIP, string duration, string intensity)
+    IEnumerator TriggerLoop()
     {
-        isSendingRequest = true;
-
-        string url = $"https://io.adafruit.com/api/v2/{adafruitIOUsername}/feeds/{feedName}/data";
-        string innerJson = $"{{\"deviceIP\":\"{deviceIP}\",\"duration\":\"{duration}\",\"intensity\":\"{intensity}\"}}";
-        string json = $"{{\"value\":\"{innerJson.Replace("\"", "\\\"")}\"}}";
-        Debug.Log("URL: " + url);
-        Debug.Log("JSON: " + json);
-
-        using (UnityWebRequest request = UnityWebRequest.PostWwwForm(url, "POST"))
+        int count = 0;
+        while (true)
         {
-            byte[] jsonToSend = new System.Text.UTF8Encoding().GetBytes(json);
-            request.uploadHandler = (UploadHandler)new UploadHandlerRaw(jsonToSend);
-            request.downloadHandler = (DownloadHandler)new DownloadHandlerBuffer();
-            request.SetRequestHeader("Content-Type", "application/json");
-            request.SetRequestHeader("X-AIO-Key", adafruitIOKey);
-
-            string sendToAdafruitTimestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff");
-            Debug.Log("Send Timestamp: " + sendToAdafruitTimestamp);
-
-
-            yield return request.SendWebRequest();
-
-            if (request.result == UnityWebRequest.Result.ConnectionError || request.result == UnityWebRequest.Result.ProtocolError)
-            {
-                Debug.LogError(request.error);
-            }
-            else
-            {
-                Debug.Log("Response: " + request.downloadHandler.text);
-                string ResponseFromAdafruitTimestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff");
-                Debug.Log("Response Timestamp: " + ResponseFromAdafruitTimestamp);
-
-                // Write to CSV file
-                using (StreamWriter writer = new StreamWriter(filePath, true))
-                {
-                    writer.WriteLine($"{sendToAdafruitTimestamp},{ResponseFromAdafruitTimestamp}");
-                }
-            }
+            count++;
+            Debug.Log("TriggerLoop iteration: " + count);
+            float currentDistance = Vector3.Distance(playerTransform.position, transform.position);
+            SendScentRequest(currentDistance);
+            yield return new WaitForSeconds(loopInterval);
         }
-
-        yield return new WaitForSeconds(7f);
-        isSendingRequest = false;
     }
 }
